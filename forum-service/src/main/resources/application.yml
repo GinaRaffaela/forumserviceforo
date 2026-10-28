@@ -1,0 +1,24 @@
+server:
+  port: ${FORUM_PORT:8082}
+spring:
+  application:
+    name: forum-service
+  datasource:
+    url: ${FORUM_DB_URL:jdbc:oracle:thin:@localhost:1521/XEPDB1}
+    username: ${FORUM_DB_USERNAME:FORO_FORUM}
+    password: ${FORUM_DB_PASSWORD:forum2026}
+    driver-class-name: oracle.jdbc.OracleDriver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+security:
+  jwt:
+    secret: ${JWT_SECRET:clave_secreta_jwt_para_tokens_de_al_menos_32_bytes_12345}
+logging:
+  level:
+    root: INFO
+    cl.duoc.foro: INFO
