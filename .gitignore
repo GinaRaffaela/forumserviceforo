@@ -1,0 +1,28 @@
+# Compilación Maven
+target/
+**/target/
+BOOT-INF/
+dependency-reduced-pom.xml
+
+# Credenciales, variables de entorno y Wallet de Oracle Cloud
+.env
+.env.*
+!.env.example
+Wallet*/
+wallet*/
+*.sso
+*.p12
+*.jks
+ewallet.*
+cwallet.*
+
+# IDEs y Sistema Operativo
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+.settings/
+.DS_Store
+Thumbs.db
+*.log
