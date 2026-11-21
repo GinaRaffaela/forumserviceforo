@@ -28,6 +28,8 @@ WORKDIR /app
 RUN mkdir -p /app/wallet
 
 COPY --from=build /workspace/forum-service/target/forum-service-1.0.0-SNAPSHOT.jar /app/app.jar
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
 
 ENV FORUM_PORT=8082 \
     FORUM_DB_URL="jdbc:oracle:thin:@host.docker.internal:1521/XEPDB1" \
@@ -41,4 +43,4 @@ ENV FORUM_PORT=8082 \
 
 EXPOSE 8082
 
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

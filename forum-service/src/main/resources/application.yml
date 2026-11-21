@@ -16,6 +16,8 @@ spring:
     deserialization:
       fail-on-unknown-properties: true
 security:
+  cors:
+    origins: ${SECURITY_CORS_ORIGINS:http://localhost:4200,http://localhost:3000}
   jwt:
     secret: ${JWT_SECRET:clave_secreta_jwt_para_tokens_de_al_menos_32_bytes_12345}
 logging:
