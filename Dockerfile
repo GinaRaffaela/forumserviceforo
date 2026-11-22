@@ -24,17 +24,17 @@ RUN mvn clean package -DskipTests -B
 FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 
-# Directorio opcional para montar Wallet de Oracle Cloud Autonomous Database
-RUN mkdir -p /app/wallet
+# Directorio opcional para montar o descargar Wallet de Oracle Cloud Autonomous Database
+RUN apt-get update && apt-get install -y --no-install-recommends awscli unzip && rm -rf /var/lib/apt/lists/* && mkdir -p /app/wallet
 
 COPY --from=build /workspace/forum-service/target/forum-service-1.0.0-SNAPSHOT.jar /app/app.jar
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
 
 ENV FORUM_PORT=8082 \
-    FORUM_DB_URL="jdbc:oracle:thin:@host.docker.internal:1521/XEPDB1" \
-    FORUM_DB_USERNAME="FORO_FORUM" \
-    FORUM_DB_PASSWORD="forum2026" \
+    TNS_ADMIN="/app/wallet" \
+    FORUM_DB_URL="jdbc:oracle:thin:@btjowhcmgwjbqtnv_high?TNS_ADMIN=/app/wallet" \
+    FORUM_DB_USERNAME="gina" \
     JWT_SECRET="clave_secreta_jwt_para_tokens_de_al_menos_32_bytes_12345" \
     DEMO_USERS_URL="http://users-service:8081" \
     DEMO_PASSWORD="Demo1234" \

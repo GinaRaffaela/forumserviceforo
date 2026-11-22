@@ -132,7 +132,7 @@ jobs:
   deploy-ec2:
     name: Deploy forum-service API to EC2 through Systems Manager
     needs: publish
-    if: (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && vars.EC2_INSTANCE_ID != ''
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/semana5' || github.event_name == 'workflow_dispatch') && vars.EC2_INSTANCE_ID != ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:

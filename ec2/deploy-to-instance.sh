@@ -37,7 +37,7 @@ jq -n --arg command "$remote_command" '{commands: [$command]}' > "$parameters_fi
 command_id="$(aws ssm send-command \
   --instance-ids "$instance_id" \
   --document-name AWS-RunShellScript \
-  --comment "Deploy Pet application from GitHub Actions" \
+  --comment "Deploy Foro forum-service from GitHub Actions" \
   --timeout-seconds 900 \
   --parameters "file://$parameters_file" \
   --region "$region" \

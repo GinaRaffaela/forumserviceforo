@@ -60,9 +60,69 @@ with open(sys.argv[1], "w", encoding="utf-8") as output:
             raise SystemExit(f"Secret is missing a valid {key} value.")
         output.write(f"{key}={value}\n")
 ' "$env_file"
-printf 'AWS_REGION=%s\nORACLE_WALLET_S3_BUCKET=%s\nORACLE_WALLET_S3_KEY=%s\nTNS_ADMIN=/app/wallet\n' \
+printf 'AWS_REGION=%s\nORACLE_WALLET_S3_BUCKET=%s\nORACLE_WALLET_S3_KEY=%s\nTNS_ADMIN=/app/wallet\nSPRING_PROFILES_ACTIVE=demo\nDEMO_USERS_URL=http://foro-users-service:8081\n' \
   "$region" "$wallet_bucket" "$wallet_key" >> "$env_file"
 chmod 600 "$env_file"
+
+if [[ -d /etc/nginx/conf.d ]]; then
+  rm -f /etc/nginx/conf.d/pet-app.conf /etc/nginx/conf.d/default.conf
+  cat > /etc/nginx/conf.d/foro-app.conf <<'NGINX'
+server {
+    listen 80 default_server;
+    server_name _;
+
+    location /api/auth {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/users {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/categories {
+        proxy_pass http://127.0.0.1:8082;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/topics {
+        proxy_pass http://127.0.0.1:8082;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+NGINX
+  systemctl reload nginx 2>/dev/null || true
+fi
+
+wallet_host_dir="/var/lib/foro-oracle-wallet"
+mkdir -p "$wallet_host_dir"
+wallet_zip="$(mktemp /tmp/foro-wallet.XXXXXX.zip)"
+aws s3 cp "s3://${wallet_bucket}/${wallet_key}" "$wallet_zip" --region "$region" >/dev/null
+python3 -m zipfile -e "$wallet_zip" "$wallet_host_dir"
+find "$wallet_host_dir" -mindepth 2 -type f -exec cp -f {} "$wallet_host_dir/" \;
+rm -f -- "$wallet_zip"
+chmod -R a+rX "$wallet_host_dir"
 
 backup=""
 new_container_attempted=false
@@ -91,10 +151,13 @@ if docker inspect foro-forum-service >/dev/null 2>&1; then
 fi
 
 new_container_attempted=true
+docker network create foro-net >/dev/null 2>&1 || true
 docker run -d \
   --name foro-forum-service \
+  --network foro-net \
   --restart unless-stopped \
   --publish 127.0.0.1:8082:8082 \
+  --volume "${wallet_host_dir}:/app/wallet:ro" \
   --env-file "$env_file" \
   "$image" >/dev/null
 rm -f -- "$env_file"
