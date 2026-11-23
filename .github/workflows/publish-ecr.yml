@@ -1,0 +1,190 @@
+name: Test, publish and deploy forum-service API to EC2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/semana5
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-forum-api-ecr
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Test and publish forum-service image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      ECR_REPOSITORY: foro-forum-service
+
+    outputs:
+      image: ${{ steps.image-reference.outputs.image }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Run tests
+        run: |
+          sed -i 's/\r$//' docker-entrypoint.sh
+          chmod +x docker-entrypoint.sh
+          sh -n docker-entrypoint.sh
+          test_dir="$(mktemp -d)"
+          mkdir -p "$test_dir/bin"
+          cat > "$test_dir/bin/java" <<'EOF'
+          #!/bin/sh
+          test "$#" -eq 2
+          test "$1" = "-jar"
+          test "$2" = "/app/app.jar"
+          EOF
+          chmod +x "$test_dir/bin/java"
+          PATH="$test_dir/bin:$PATH" ./docker-entrypoint.sh
+          mvn -B test
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS account and create ECR repository if needed
+        shell: bash
+        run: |
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          if [[ ! "$account_id" =~ ^[0-9]{12}$ ]]; then
+            echo "::error::Could not determine the AWS account ID."
+            exit 1
+          fi
+          echo "AWS_ACCOUNT_ID=$account_id" >> "$GITHUB_ENV"
+
+          if ! repositories="$(aws ecr describe-repositories \
+            --repository-names "$ECR_REPOSITORY" \
+            --region "$AWS_REGION" 2>&1)"; then
+            if [[ "$repositories" != *"RepositoryNotFoundException"* ]]; then
+              echo "$repositories"
+              exit 1
+            fi
+            aws ecr create-repository \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-tag-mutability IMMUTABLE \
+              --image-scanning-configuration scanOnPush=true \
+              --encryption-configuration encryptionType=AES256 \
+              --region "$AWS_REGION"
+          fi
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Check whether the immutable image already exists
+        id: existing-image
+        shell: bash
+        run: |
+          if image="$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$GITHUB_SHA" \
+            --region "$AWS_REGION" 2>&1)"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Image for this commit already exists; it will be reused."
+          elif [[ "$image" == *"ImageNotFoundException"* ]]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$image" >&2
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.existing-image.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        if: steps.existing-image.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export image reference
+        id: image-reference
+        shell: bash
+        run: |
+          echo "image=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+  deploy-ec2:
+    name: Deploy forum-service API to EC2 through Systems Manager
+    needs: publish
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/semana5' || github.event_name == 'workflow_dispatch') && vars.EC2_INSTANCE_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: foro-forum-api-ec2-deployment
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      ORACLE_CREDENTIALS_SECRET_ARN: ${{ vars.ORACLE_CREDENTIALS_SECRET_ARN }}
+      ORACLE_WALLET_S3_BUCKET: ${{ vars.ORACLE_WALLET_S3_BUCKET }}
+      ORACLE_WALLET_S3_KEY: ${{ vars.ORACLE_WALLET_S3_KEY }}
+      IMAGE_URI: ${{ needs.publish.outputs.image }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify EC2 and Oracle resource identifiers
+        shell: bash
+        run: |
+          if [[ ! "$EC2_INSTANCE_ID" =~ ^i-[0-9a-f]{8,17}$ ]]; then
+            echo "::error::Set the EC2_INSTANCE_ID Actions variable to the managed EC2 instance ID."
+            exit 1
+          fi
+          if [[ ! "$ORACLE_CREDENTIALS_SECRET_ARN" =~ ^arn:aws:secretsmanager:${AWS_REGION}:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$ ]]; then
+            echo "::error::Set ORACLE_CREDENTIALS_SECRET_ARN to the secret ARN in Actions Variables."
+            exit 1
+          fi
+          if [[ ! "$ORACLE_WALLET_S3_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ \
+            || ! "$ORACLE_WALLET_S3_KEY" =~ ^[A-Za-z0-9._/-]{1,1024}$ ]]; then
+            echo "::error::Set ORACLE_WALLET_S3_BUCKET and ORACLE_WALLET_S3_KEY in Actions Variables."
+            exit 1
+          fi
+
+      - name: Deploy image and smoke-test the EC2 service
+        shell: bash
+        run: >-
+          bash ec2/deploy-to-instance.sh
+          "$EC2_INSTANCE_ID"
+          "$AWS_REGION"
+          api
+          ec2/deploy-api.sh
+          "$IMAGE_URI"
+          "$AWS_REGION"
+          "$ORACLE_CREDENTIALS_SECRET_ARN"
+          "$ORACLE_WALLET_S3_BUCKET"
+          "$ORACLE_WALLET_S3_KEY"
